@@ -11,7 +11,7 @@ import {ILiquidSwap} from "../interfaces/ILiquidSwap.sol";
 import {IWrappedHlpDepositor} from "../interfaces/IWrappedHlpDepositor.sol";
 
 /// @title wHlpZapper
-/// @author HyperLend
+/// @author LightLend
 /// @notice Contract used to swap tokens to USDhl before depositing them to wHLP
 contract wHlpZapper is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
@@ -30,8 +30,8 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
     /// @notice address of the vault deposit token (USDhl)
     address public usdhl = 0xb50A96253aBDF803D85efcDce07Ad8becBc52BD5;
 
-    /// @notice `hyperlend` bytes
-    bytes public communityCode = hex"68797065726c656e64";
+    /// @notice `lightlend` bytes
+    bytes public communityCode = hex"6c696768746c656e64";
 
     constructor() Ownable(msg.sender) {}
 
@@ -53,11 +53,11 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
         ILiquidSwap.Swap[][] calldata hops,
         uint256 expectedAmountOut,
         uint256 feeBps
-    ) external {
+    ) external nonReentrant returns (uint256 sharesReceived) {
         require(block.timestamp < deadline, "wHlpZapper: expired");
 
-        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
-        IERC20(tokenIn).approve(address(liquidSwapRouter), amountIn);
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        IERC20(tokenIn).forceApprove(address(liquidSwapRouter), amountIn);
 
         liquidSwapRouter.executeSwaps(
             tokens,
@@ -75,7 +75,7 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
             "wHlpZapper: minAmountOut > balanceOut"
         );
 
-        IERC20(usdhl).approve(address(depositor), balanceOut);
+        IERC20(usdhl).forceApprove(address(depositor), balanceOut);
         depositor.deposit(
             usdhl,
             balanceOut,
@@ -117,7 +117,7 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
                 address(this),
                 amountIn
             );
-            IERC20(tokenIn).approve(address(gluex), amountIn);
+            IERC20(tokenIn).forceApprove(address(gluex), amountIn);
         }
 
         uint256 balanceBefore = IERC20(usdhl).balanceOf(address(this));
@@ -132,7 +132,7 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
             "wHlpZapper: insufficient amount out"
         );
 
-        IERC20(usdhl).approve(address(depositor), receivedUsdhl);
+        IERC20(usdhl).forceApprove(address(depositor), receivedUsdhl);
         depositor.deposit(
             usdhl,
             receivedUsdhl,

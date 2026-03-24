@@ -3,13 +3,14 @@ pragma solidity 0.8.24;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { Ownable2Step, Ownable } from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import { IPool } from "./interfaces/IPool.sol";
 
 /// @title StrategyManager
-/// @author HyperLend
+/// @author LightLend
 /// @notice contract used to manage custom strategy on behalf of the user
-contract StrategyManager is Ownable {
+contract StrategyManager is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice variables are used on the UI to identify which StrategyManager is used for certain pairs of assets
@@ -40,18 +41,22 @@ contract StrategyManager is Ownable {
       _;
     }
 
-    function executeCall(address target, uint256 value, bytes memory data, bool allowRevert) public payable onlyOwner() returns (bytes memory) {
+    function executeCall(address target, uint256 value, bytes memory data, bool allowRevert) public payable onlyOwner() nonReentrant returns (bytes memory) {
+        return _executeCall(target, value, data, allowRevert);
+    }
+
+    function executeMultiCall(Call[] memory calls) external payable onlyOwner() nonReentrant {
+        for (uint256 i  = 0; i < calls.length; i++){
+            _executeCall(calls[i].target, calls[i].value, calls[i].data, calls[i].allowRevert);
+        }
+    }
+
+    function _executeCall(address target, uint256 value, bytes memory data, bool allowRevert) internal returns (bytes memory) {
         (bool success, bytes memory returnData) = target.call{value: value}(data);
         if (!allowRevert) {
             if (!success) _revertWithReason(returnData);
         }
         return returnData;
-    }
-
-    function executeMultiCall(Call[] memory calls) external payable onlyOwner() {
-        for (uint256 i  = 0; i < calls.length; i++){
-            executeCall(calls[i].target, calls[i].value, calls[i].data, calls[i].allowRevert);
-        }
     }
 
     function cleanOutTokens(address[] memory tokens) external onlyOwnerOrSelf() {
@@ -61,7 +66,7 @@ contract StrategyManager is Ownable {
                     require(sent, "cleanOutTokens: failed to send native");
             } else {
                 uint256 balance = IERC20(tokens[i]).balanceOf(address(this));
-                IERC20(tokens[i]).transfer(owner(), balance);
+                IERC20(tokens[i]).safeTransfer(owner(), balance);
             }
         }
     }

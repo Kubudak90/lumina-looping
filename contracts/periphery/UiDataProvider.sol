@@ -82,7 +82,12 @@ contract UiDataProvider {
 
         StrategyDetailed[] memory userStrategyDetailedArray = new StrategyDetailed[](managers.length);
         for (uint256 i = 0; i < managers.length; i++){
-            userStrategyDetailedArray[i] = getStrategy(managers[i]);
+            try this.getStrategy(managers[i]) returns (StrategyDetailed memory detail) {
+                userStrategyDetailedArray[i] = detail;
+            } catch {
+                // If one strategy fails, return a zeroed-out entry with just the manager address
+                userStrategyDetailedArray[i].manager = managers[i];
+            }
         }
 
         return userStrategyDetailedArray;
@@ -97,7 +102,6 @@ contract UiDataProvider {
         IAToken variableDebtToken;
         uint256 debtPrice;
         uint256 yieldPrice;
-        uint256 denominator;
     }
 
     function getStrategy(address _manager) public view returns (StrategyDetailed memory) {
@@ -125,18 +129,32 @@ contract UiDataProvider {
             vars.debtPrice = oracle.getAssetPrice(vars.debtAssetAddr);
             vars.yieldPrice = oracle.getAssetPrice(vars.yieldAssetAddr);
 
-            yieldValueUsd = vars.aYieldToken.scaledBalanceOf(_manager) * vars.yieldPrice; 
-            debtValueUsd = vars.variableDebtToken.scaledBalanceOf(_manager) * vars.debtPrice;
+            // Use balanceOf (not scaledBalanceOf) for actual accrued balances
+            uint256 yieldBalance = vars.aYieldToken.balanceOf(_manager);
+            uint256 debtBalance = vars.variableDebtToken.balanceOf(_manager);
 
-            vars.denominator = yieldValueUsd > debtValueUsd ? (yieldValueUsd - debtValueUsd) : 1; 
-            leverage = yieldValueUsd / vars.denominator;
+            // Normalize to 18 decimals for comparison
+            uint256 yieldDecimals = IERC20Metadata(vars.yieldAssetAddr).decimals();
+            uint256 debtDecimals = IERC20Metadata(vars.debtAssetAddr).decimals();
+
+            yieldValueUsd = (yieldBalance * vars.yieldPrice) / (10 ** yieldDecimals);
+            debtValueUsd = (debtBalance * vars.debtPrice) / (10 ** debtDecimals);
+
+            // Handle underwater/edge cases
+            if (yieldValueUsd == 0) {
+                leverage = 0;
+            } else if (debtValueUsd >= yieldValueUsd) {
+                leverage = type(uint256).max; // Infinite/underwater
+            } else {
+                leverage = (yieldValueUsd * 1e18) / (yieldValueUsd - debtValueUsd);
+            }
         }
 
         Balances memory balances;
         {
             balances = Balances({
-                debtBalance: vars.variableDebtToken.scaledBalanceOf(_manager),
-                yieldBalance: vars.aYieldToken.scaledBalanceOf(_manager),
+                debtBalance: vars.variableDebtToken.balanceOf(_manager),
+                yieldBalance: vars.aYieldToken.balanceOf(_manager),
                 debtValueUsd: debtValueUsd,
                 yieldValueUsd: yieldValueUsd
             });

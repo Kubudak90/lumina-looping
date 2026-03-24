@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { StrategyManager } from "./StrategyManager.sol";
 
 /// @title StrategyManagerFactory
-/// @author HyperLend
+/// @author LightLend
 /// @notice factory contract used to create strategyManager contracts for users
-contract StrategyManagerFactory is Ownable {
+contract StrategyManagerFactory {
     /// @notice mapping of user => StrategyManager contract
     mapping(address => address[]) public userStrategies;
     /// @notice mapping of user => strategyId => stratAddress
@@ -16,13 +15,12 @@ contract StrategyManagerFactory is Ownable {
     /// @notice event emitted when new StrategyManager contract is created
     event StrategyDeployed(address indexed owner, address indexed stratManager, address pool, address yieldAsset, address debtAsset);
 
-    constructor() Ownable(msg.sender){}
-
     /// @notice create a new strategyManager contract for the user
     /// @param _pool address of the lending pool to supply/borrow from
     /// @param _yieldAsset address of the asset to be supplied
     /// @param _debtAsset address of the asset to be borrowed
     function createStrategyManager(address _pool, address _yieldAsset, address _debtAsset) external {
+        require(_pool != address(0) && _yieldAsset != address(0) && _debtAsset != address(0), "zero address");
         require(existingStrategies[msg.sender][getStrategyId(_pool, _yieldAsset, _debtAsset)] == address(0), "strategy already exists");
 
         StrategyManager _stratManager = new StrategyManager(msg.sender, _pool, _yieldAsset, _debtAsset);

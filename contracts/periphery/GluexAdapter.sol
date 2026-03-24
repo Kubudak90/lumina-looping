@@ -8,7 +8,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IWrappedHype} from "../interfaces/IWrappedHype.sol";
 
 /// @title GluexAdapter
-/// @author HyperLend
+/// @author LightLend
 /// @notice Contract used to swap tokens on GlueX, using a uniswap-like interface for integration.
 /// @dev Swap relies on pre-setting swap calldata
 contract GluexAdapter is ReentrancyGuard {
@@ -21,6 +21,30 @@ contract GluexAdapter is ReentrancyGuard {
     IWrappedHype public WHYPE =
         IWrappedHype(0x5555555555555555555555555555555555555555);
 
+    /// @notice owner of the contract
+    address public owner;
+    /// @notice mapping of authorized callers
+    mapping(address => bool) public authorizedCallers;
+
+    modifier onlyAuthorized() {
+        require(authorizedCallers[msg.sender] || msg.sender == owner, "not authorized");
+        _;
+    }
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "not owner");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    /// @notice set authorized caller status
+    function setAuthorizedCaller(address _caller, bool _status) external onlyOwner {
+        authorizedCallers[_caller] = _status;
+    }
+
     /// @notice used to preset the swap route calldata, which will then be used in the swap function.
     /// @dev This must be called in the same transaction as the swap.
     /// @param tokenIn The input token of the swap.
@@ -30,7 +54,7 @@ contract GluexAdapter is ReentrancyGuard {
         address tokenIn,
         address tokenOut,
         bytes calldata gluexData
-    ) external {
+    ) external onlyAuthorized {
         // Generate unique slots for this token pair in transient storage
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
         bytes32 blockSlot = keccak256(abi.encodePacked(baseSlot, "block"));
@@ -76,7 +100,7 @@ contract GluexAdapter is ReentrancyGuard {
         bytes memory gluexCallData = _loadSwapData(tokenIn, tokenOut);
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
-        IERC20(tokenIn).approve(address(gluex), amountIn);
+        IERC20(tokenIn).forceApprove(address(gluex), amountIn);
 
         (bool success, ) = gluex.call(gluexCallData);
         require(success, "GluexAdapter: gluex swap failed");
@@ -141,6 +165,20 @@ contract GluexAdapter is ReentrancyGuard {
         address tokenOut
     ) external returns (bytes memory) {
         return _loadSwapData(tokenIn, tokenOut);
+    }
+
+    /// @notice rescue stuck tokens from the contract
+    function rescueTokens(address _token, address _to) external onlyOwner {
+        require(_to != address(0), "zero address");
+        uint256 balance = IERC20(_token).balanceOf(address(this));
+        if (balance > 0) {
+            IERC20(_token).safeTransfer(_to, balance);
+        }
+        uint256 ethBalance = address(this).balance;
+        if (ethBalance > 0) {
+            (bool success, ) = _to.call{value: ethBalance}("");
+            require(success, "ETH transfer failed");
+        }
     }
 
     fallback() external payable {}

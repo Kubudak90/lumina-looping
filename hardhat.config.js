@@ -6,7 +6,17 @@ const mnemonic = process.env.MNEMONIC;
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-    solidity: "0.8.24",
+    solidity: {
+        version: "0.8.24",
+        settings: {
+            evmVersion: "cancun",
+            viaIR: true,
+            optimizer: {
+                enabled: true,
+                runs: 200,
+            },
+        },
+    },
     networks: {
         hardhat: {
             gas: "auto",
@@ -15,14 +25,14 @@ module.exports = {
             },
             chainId: 1337,
         },
-        hyperEvmTestnet: {
+        lighterEvmTestnet: {
             accounts: {
                 mnemonic,
             },
             chainId: 998,
             url: 'https://rpc.hyperliquid-testnet.xyz/evm',
         },
-        hyperEvm: {
+        lighterEvm: {
             accounts: [process.env.PRIVATE_KEY_MAINNET || process.env.PRIVATE_KEY],
             chainId: 999,
             url: 'https://rpc.hyperliquid.xyz/evm',
@@ -30,20 +40,20 @@ module.exports = {
     },
     etherscan: {
         apiKey: {
-            hyperEvmTestnet: "empty",
-            hyperEvm: "empty"
+            lighterEvmTestnet: "empty",
+            lighterEvm: "empty"
         },
         customChains: [
             {
-                network: "hyperEvmTestnet",
+                network: "lighterEvmTestnet",
                 chainId: 998,
                 urls: {
-                    apiURL: "https://explorer.hyperlend.finance/api",
-                    browserURL: "https://explorer.hyperlend.finance"
+                    apiURL: "https://explorer.lightlend.finance/api",
+                    browserURL: "https://explorer.lightlend.finance"
                 }
             },
             {
-                network: "hyperEvm",
+                network: "lighterEvm",
                 chainId: 999,
                 urls: {
                     apiURL: "https://hyperliquid.cloud.blockscout.com/api",

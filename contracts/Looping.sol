@@ -11,8 +11,8 @@ import { ISwapper } from "./interfaces/ISwapper.sol";
 import { IPool } from "./interfaces/IPool.sol";
 
 /// @title Looping
-/// @author HyperLend
-/// @notice Contract used to open leveraged positions on HyperLend
+/// @author LightLend
+/// @notice Contract used to open leveraged positions on LightLend
 contract Looping is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -65,8 +65,18 @@ contract Looping is Ownable, ReentrancyGuard {
         uint256 _minInitialAmountOut,
         uint256 _deadline
     ) external nonReentrant() {
+        require(block.timestamp <= _deadline, "expired");
         require(pools[_pool], "pool not allowed");
-        
+        require(_debtAsset != _yieldAsset, "assets must differ");
+        require(_path.length >= 2, "invalid path");
+        if (!_startWithYield) {
+            require(_path[0] == _debtAsset, "path[0] != debtAsset");
+            require(_path[_path.length - 1] == _yieldAsset, "path[last] != yieldAsset");
+        } else {
+            require(_path[0] == _yieldAsset, "path[0] != yieldAsset");
+            require(_path[_path.length - 1] == _debtAsset, "path[last] != debtAsset");
+        }
+
         //transfer any funds accidentally sent/stuck in the contract to the owner first
         _refund(_debtAsset, _yieldAsset, 0, 0, owner());
 
@@ -109,7 +119,12 @@ contract Looping is Ownable, ReentrancyGuard {
         uint256 _withdrawAmount,
         uint256 _deadline
     ) external nonReentrant() {
+        require(block.timestamp <= _deadline, "expired");
         require(pools[_pool], "pool not allowed");
+        require(_debtAsset != _yieldAsset, "assets must differ");
+        require(_path.length >= 2, "invalid path");
+        require(_path[0] == _yieldAsset, "path[0] != yieldAsset");
+        require(_path[_path.length - 1] == _debtAsset, "path[last] != debtAsset");
 
         //transfer any funds accidentally sent/stuck in the contract to the owner first
         _refund(_debtAsset, _yieldAsset, 0, 0, owner());
@@ -214,10 +229,10 @@ contract Looping is Ownable, ReentrancyGuard {
         hYieldToken.safeTransferFrom(user, address(this), withdrawAmount);
 
         //withdraw yield token
-        IPool(msg.sender).withdraw(yieldAsset, withdrawAmount, address(this));
+        uint256 actualWithdrawn = IPool(msg.sender).withdraw(yieldAsset, withdrawAmount, address(this));
 
         //swap yield token to debt token
-        _swap(swapper, path, withdrawAmount, minAmountOut, deadline);
+        _swap(swapper, path, actualWithdrawn, minAmountOut, deadline);
     }
 
     /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/

@@ -10,7 +10,7 @@ import {ILiquidSwap} from "../interfaces/ILiquidSwap.sol";
 import {IWrappedHype} from "../interfaces/IWrappedHype.sol";
 
 /// @title LiquidSwapAdapter
-/// @author HyperLend
+/// @author LightLend
 /// @notice Contract used to swap tokens on LiquidSwap, using a uniswap-like interface for integration.
 contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
@@ -21,14 +21,27 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
     IWrappedHype public WHYPE =
         IWrappedHype(0x5555555555555555555555555555555555555555);
 
+    /// @notice mapping of authorized callers
+    mapping(address => bool) public authorizedCallers;
+
+    modifier onlyAuthorized() {
+        require(authorizedCallers[msg.sender] || msg.sender == owner(), "not authorized");
+        _;
+    }
+
     constructor() Ownable(msg.sender) {}
+
+    /// @notice set authorized caller status
+    function setAuthorizedCaller(address _caller, bool _status) external onlyOwner {
+        authorizedCallers[_caller] = _status;
+    }
 
     function setSwapPath(
         address[] calldata tokens,
         address tokenIn,
         address tokenOut,
         ILiquidSwap.Swap[][] calldata hops
-    ) external {
+    ) external onlyAuthorized {
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
         assembly {
             tstore(baseSlot, number())
@@ -58,8 +71,8 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         address[] memory tokens = _loadTokens(baseSlot);
         ILiquidSwap.Swap[][] memory hops = _loadHops(baseSlot);
 
-        IERC20(tokenIn).transferFrom(msg.sender, address(this), amountIn);
-        IERC20(tokenIn).approve(address(liquidSwapRouter), amountIn);
+        IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
+        IERC20(tokenIn).forceApprove(address(liquidSwapRouter), amountIn);
 
         liquidSwapRouter.executeSwaps(
             tokens,
@@ -77,7 +90,7 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
 
         uint256 balanceOut = IERC20(tokenOut).balanceOf(address(this));
         require(balanceOut >= amountOutMin, "Swapper: insufficient output");
-        IERC20(tokenOut).transfer(to, balanceOut);
+        IERC20(tokenOut).safeTransfer(to, balanceOut);
     }
 
     function getSwapRoute(
@@ -126,34 +139,29 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
             }
 
             for (uint256 j = 0; j < innerLen; ++j) {
-                // Each Swap struct will take 4 slots
-                bytes32 swap_j_slot_base = keccak256(
-                    abi.encodePacked(hop_i_Slot, j)
-                );
-
-                ILiquidSwap.Swap calldata swap = hops[i][j];
-                address tokenIn = swap.tokenIn;
-                address tokenOut = swap.tokenOut;
-                uint256 amountIn = swap.amountIn;
-                uint8 routerIndex = swap.routerIndex;
-                uint24 fee = swap.fee;
-                bool stable = swap.stable;
-
-                assembly {
-                    // Pack routerIndex, fee, and stable into one slot
-                    // stable (1 bit) << 32 | fee (24 bits) << 8 | routerIndex (8 bits)
-                    let packedData := or(
-                        or(routerIndex, shl(8, fee)),
-                        shl(32, stable)
-                    )
-
-                    // Store struct fields in 4 consecutive slots
-                    tstore(swap_j_slot_base, tokenIn)
-                    tstore(add(swap_j_slot_base, 1), tokenOut)
-                    tstore(add(swap_j_slot_base, 2), amountIn)
-                    tstore(add(swap_j_slot_base, 3), packedData)
-                }
+                _storeSwap(hop_i_Slot, j, hops[i][j]);
             }
+        }
+    }
+
+    function _storeSwap(bytes32 hop_i_Slot, uint256 j, ILiquidSwap.Swap calldata swap) internal {
+        bytes32 swap_j_slot_base = keccak256(abi.encodePacked(hop_i_Slot, j));
+        address tokenIn = swap.tokenIn;
+        address tokenOut = swap.tokenOut;
+        uint256 amountIn = swap.amountIn;
+        uint8 routerIndex = swap.routerIndex;
+        uint24 fee = swap.fee;
+        bool stable = swap.stable;
+
+        assembly {
+            let packedData := or(
+                or(routerIndex, shl(8, fee)),
+                shl(32, stable)
+            )
+            tstore(swap_j_slot_base, tokenIn)
+            tstore(add(swap_j_slot_base, 1), tokenOut)
+            tstore(add(swap_j_slot_base, 2), amountIn)
+            tstore(add(swap_j_slot_base, 3), packedData)
         }
     }
 
