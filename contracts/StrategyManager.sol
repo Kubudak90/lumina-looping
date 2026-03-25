@@ -8,8 +8,11 @@ import { ReentrancyGuard } from "@openzeppelin/contracts/utils/ReentrancyGuard.s
 import { IPool } from "./interfaces/IPool.sol";
 
 /// @title StrategyManager
+/// @notice Single-user strategy account for managing leveraged lending positions.
+/// @dev WARNING: This contract allows arbitrary external calls via executeCall/executeMultiCall.
+/// It is designed for single-user strategy accounts where the owner is the sole beneficiary.
+/// Do NOT use this contract for multi-user or shared fund management.
 /// @author LightLend
-/// @notice contract used to manage custom strategy on behalf of the user
 contract StrategyManager is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -25,6 +28,9 @@ contract StrategyManager is Ownable2Step, ReentrancyGuard {
         bool allowRevert;
     }
 
+    /// @notice Emitted when an external call is executed
+    event CallExecuted(address indexed target, uint256 value, bytes data, bytes returnData);
+
     constructor(
         address _owner,
         address _pool,
@@ -36,8 +42,8 @@ contract StrategyManager is Ownable2Step, ReentrancyGuard {
         debtAsset = _debtAsset;
     }
 
-    modifier onlyOwnerOrSelf(){
-      require(msg.sender == owner() || msg.sender == address(this), "only owner or self");
+    modifier onlyOwner2(){
+      require(msg.sender == owner(), "only owner");
       _;
     }
 
@@ -56,10 +62,11 @@ contract StrategyManager is Ownable2Step, ReentrancyGuard {
         if (!allowRevert) {
             if (!success) _revertWithReason(returnData);
         }
+        emit CallExecuted(target, value, data, returnData);
         return returnData;
     }
 
-    function cleanOutTokens(address[] memory tokens) external onlyOwnerOrSelf() {
+    function cleanOutTokens(address[] memory tokens) external onlyOwner2() {
         for (uint256 i = 0; i < tokens.length; i++){
             if (tokens[i] == address(0)){
                     (bool sent,) = owner().call{value: address(this).balance}("");
@@ -71,7 +78,7 @@ contract StrategyManager is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function withdrawAllFromPool(address[] calldata tokens) external onlyOwnerOrSelf() {
+    function withdrawAllFromPool(address[] calldata tokens) external onlyOwner2() {
         for (uint256 i = 0; i < tokens.length; i++){
             IPool(pool).withdraw(tokens[i], type(uint256).max, owner());
         }

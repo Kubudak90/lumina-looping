@@ -69,6 +69,9 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
             owner() // feeRecipient
         );
 
+        // Reset residual approval after swap
+        IERC20(tokenIn).forceApprove(address(liquidSwapRouter), 0);
+
         uint256 balanceOut = IERC20(usdhl).balanceOf(address(this));
         require(
             balanceOut >= amountOutMin,
@@ -124,6 +127,10 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
 
         (bool success, ) = gluex.call{value: msg.value}(gluexData);
         require(success, "wHlpZapper: gluex swap failed");
+
+        if (tokenIn != address(0)) {
+            IERC20(tokenIn).forceApprove(address(gluex), 0);
+        }
 
         uint256 receivedUsdhl = IERC20(usdhl).balanceOf(address(this)) -
             balanceBefore;

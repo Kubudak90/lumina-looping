@@ -246,6 +246,18 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         }
     }
 
+    /// @notice Rescue stuck tokens from the contract
+    /// @param _token Token address (address(0) for native ETH)
+    /// @param _amount Amount to rescue
+    function rescueTokens(address _token, uint256 _amount) external onlyOwner {
+        if (_token == address(0)) {
+            (bool success, ) = payable(msg.sender).call{value: _amount}("");
+            require(success, "ETH transfer failed");
+        } else {
+            IERC20(_token).safeTransfer(msg.sender, _amount);
+        }
+    }
+
     fallback() external payable {}
     receive() external payable {}
 }

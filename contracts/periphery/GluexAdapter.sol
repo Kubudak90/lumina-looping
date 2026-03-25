@@ -45,6 +45,27 @@ contract GluexAdapter is ReentrancyGuard {
         authorizedCallers[_caller] = _status;
     }
 
+    /// @notice Pending owner for two-step ownership transfer
+    address public pendingOwner;
+
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+
+    /// @notice Initiate ownership transfer
+    function transferOwnership(address _newOwner) external onlyOwner {
+        require(_newOwner != address(0), "zero address");
+        pendingOwner = _newOwner;
+        emit OwnershipTransferStarted(owner, _newOwner);
+    }
+
+    /// @notice Accept pending ownership
+    function acceptOwnership() external {
+        require(msg.sender == pendingOwner, "not pending owner");
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
+    }
+
     /// @notice used to preset the swap route calldata, which will then be used in the swap function.
     /// @dev This must be called in the same transaction as the swap.
     /// @param tokenIn The input token of the swap.
@@ -104,6 +125,8 @@ contract GluexAdapter is ReentrancyGuard {
 
         (bool success, ) = gluex.call(gluexCallData);
         require(success, "GluexAdapter: gluex swap failed");
+
+        IERC20(tokenIn).forceApprove(address(gluex), 0);
 
         if (address(this).balance > 0) {
             WHYPE.deposit{value: address(this).balance}();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { Ownable2Step, Ownable } from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { IERC20Metadata } from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
@@ -13,7 +13,7 @@ import { IPool } from "./interfaces/IPool.sol";
 /// @title Looping
 /// @author LightLend
 /// @notice Contract used to open leveraged positions on LightLend
-contract Looping is Ownable, ReentrancyGuard {
+contract Looping is Ownable2Step, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice mapping of whitelisted lending pools
@@ -77,9 +77,6 @@ contract Looping is Ownable, ReentrancyGuard {
             require(_path[_path.length - 1] == _debtAsset, "path[last] != debtAsset");
         }
 
-        //transfer any funds accidentally sent/stuck in the contract to the owner first
-        _refund(_debtAsset, _yieldAsset, 0, 0, owner());
-
         if (_startWithYield){
             //transfer initial _yieldAsset from user
             IERC20(_yieldAsset).safeTransferFrom(msg.sender, address(this), _initialAmount);
@@ -126,9 +123,6 @@ contract Looping is Ownable, ReentrancyGuard {
         require(_path[0] == _yieldAsset, "path[0] != yieldAsset");
         require(_path[_path.length - 1] == _debtAsset, "path[last] != debtAsset");
 
-        //transfer any funds accidentally sent/stuck in the contract to the owner first
-        _refund(_debtAsset, _yieldAsset, 0, 0, owner());
-
         //use flashloan to borrow _debtAsset
         bytes memory params = abi.encode(1, _yieldAsset, _swapper, _path, _flashloanAmount, _minAmountOut, msg.sender, _withdrawAmount, _deadline);
         IPool(_pool).flashLoanSimple(address(this), _debtAsset, _flashloanAmount, params, 0);
@@ -151,7 +145,8 @@ contract Looping is Ownable, ReentrancyGuard {
         require(initiator == address(this), "initiator != address(this)");
 
         //actionType: 0 = open position, 1 = close position
-        ( uint8 actionType, address yieldAsset, , , , , address user , ,) = abi.decode(params, (uint8, address, address, address[], uint256, uint256, address, uint256, uint256));
+        ( uint8 actionType, address yieldAsset, address _swapper, , , , address user , ,) = abi.decode(params, (uint8, address, address, address[], uint256, uint256, address, uint256, uint256));
+        require(swappers[_swapper], "callback: swapper not allowed");
 
         if (actionType == 0){
             _executeOpenPosition(params, debtAsset, amount, premium);
