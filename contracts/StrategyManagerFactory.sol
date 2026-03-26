@@ -21,6 +21,7 @@ contract StrategyManagerFactory {
     /// @param _debtAsset address of the asset to be borrowed
     function createStrategyManager(address _pool, address _yieldAsset, address _debtAsset) external {
         require(_pool != address(0) && _yieldAsset != address(0) && _debtAsset != address(0), "zero address");
+        require(_yieldAsset != _debtAsset, "yield and debt assets must differ");
         require(existingStrategies[msg.sender][getStrategyId(_pool, _yieldAsset, _debtAsset)] == address(0), "strategy already exists");
 
         StrategyManager _stratManager = new StrategyManager(msg.sender, _pool, _yieldAsset, _debtAsset);

@@ -15,11 +15,9 @@ import {IWrappedHype} from "../interfaces/IWrappedHype.sol";
 contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
-    ILiquidSwap public liquidSwapRouter =
-        ILiquidSwap(0x744489Ee3d540777A66f2cf297479745e0852f7A);
+    ILiquidSwap public immutable liquidSwapRouter;
 
-    IWrappedHype public WHYPE =
-        IWrappedHype(0x5555555555555555555555555555555555555555);
+    IWrappedHype public immutable WHYPE;
 
     /// @notice mapping of authorized callers
     mapping(address => bool) public authorizedCallers;
@@ -29,7 +27,12 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor() Ownable(msg.sender) {}
+    constructor(address _liquidSwapRouter, address _whype) Ownable(msg.sender) {
+        require(_liquidSwapRouter != address(0), "zero liquidSwapRouter");
+        require(_whype != address(0), "zero whype");
+        liquidSwapRouter = ILiquidSwap(_liquidSwapRouter);
+        WHYPE = IWrappedHype(_whype);
+    }
 
     /// @notice set authorized caller status
     function setAuthorizedCaller(address _caller, bool _status) external onlyOwner {
@@ -43,8 +46,10 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         ILiquidSwap.Swap[][] calldata hops
     ) external onlyAuthorized {
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
+        bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
         assembly {
             tstore(baseSlot, number())
+            tstore(callerSlot, caller())
         }
         _storeTokens(baseSlot, tokens);
         _storeHops(baseSlot, hops);
@@ -57,7 +62,7 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         address to,
         address, // referrer (unused)
         uint256 deadline
-    ) external nonReentrant {
+    ) external nonReentrant onlyAuthorized {
         require(block.timestamp < deadline, "Swapper: expired");
         address tokenIn = path[0];
         address tokenOut = path[path.length - 1];
@@ -67,6 +72,14 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
             lastUpdate := tload(baseSlot)
         }
         require(lastUpdate == block.number, "Swapper: path not set");
+
+        bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
+        address storedCaller;
+        assembly {
+            storedCaller := tload(callerSlot)
+        }
+        require(storedCaller != address(0), "Swapper: no caller recorded");
+        require(authorizedCallers[storedCaller] || storedCaller == owner(), "Swapper: unauthorized caller");
 
         address[] memory tokens = _loadTokens(baseSlot);
         ILiquidSwap.Swap[][] memory hops = _loadHops(baseSlot);

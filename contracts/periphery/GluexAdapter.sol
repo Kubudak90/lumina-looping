@@ -15,11 +15,10 @@ contract GluexAdapter is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice GlueX router address
-    address public gluex = 0xe95F6EAeaE1E4d650576Af600b33D9F7e5f9f7fd;
+    address public immutable gluex;
 
     /// @notice wrapped hype
-    IWrappedHype public WHYPE =
-        IWrappedHype(0x5555555555555555555555555555555555555555);
+    IWrappedHype public immutable WHYPE;
 
     /// @notice owner of the contract
     address public owner;
@@ -36,7 +35,11 @@ contract GluexAdapter is ReentrancyGuard {
         _;
     }
 
-    constructor() {
+    constructor(address _gluex, address _whype) {
+        require(_gluex != address(0), "zero gluex");
+        require(_whype != address(0), "zero whype");
+        gluex = _gluex;
+        WHYPE = IWrappedHype(_whype);
         owner = msg.sender;
     }
 
@@ -79,9 +82,11 @@ contract GluexAdapter is ReentrancyGuard {
         // Generate unique slots for this token pair in transient storage
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
         bytes32 blockSlot = keccak256(abi.encodePacked(baseSlot, "block"));
-        
+        bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
+
         assembly {
             tstore(blockSlot, number())
+            tstore(callerSlot, caller())
             tstore(baseSlot, gluexData.length)
         }
         
@@ -111,7 +116,7 @@ contract GluexAdapter is ReentrancyGuard {
         address to,
         address, // referrer; unused in this implementation
         uint deadline
-    ) external nonReentrant {
+    ) external nonReentrant onlyAuthorized {
         require(block.timestamp < deadline, "GluexAdapter: expired");
 
         address tokenIn = path[0];
@@ -148,7 +153,8 @@ contract GluexAdapter is ReentrancyGuard {
         // Generate unique slots for this token pair in transient storage
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
         bytes32 blockSlot = keccak256(abi.encodePacked(baseSlot, "block"));
-        
+        bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
+
         uint256 storedBlock;
         assembly {
             storedBlock := tload(blockSlot)
@@ -157,6 +163,13 @@ contract GluexAdapter is ReentrancyGuard {
             storedBlock == block.number,
             "GluexAdapter: path not set in this block"
         );
+
+        address storedCaller;
+        assembly {
+            storedCaller := tload(callerSlot)
+        }
+        require(storedCaller != address(0), "GluexAdapter: no caller recorded");
+        require(authorizedCallers[storedCaller] || storedCaller == owner, "GluexAdapter: unauthorized caller");
 
         // Load data length from transient storage
         uint256 dataLength;

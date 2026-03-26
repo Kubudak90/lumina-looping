@@ -17,23 +17,30 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
     /// @notice liquid swap router
-    ILiquidSwap public liquidSwapRouter =
-        ILiquidSwap(0x744489Ee3d540777A66f2cf297479745e0852f7A);
+    ILiquidSwap public immutable liquidSwapRouter;
 
     /// @notice wrapped HLP depositor
-    IWrappedHlpDepositor public depositor =
-        IWrappedHlpDepositor(0x340C9f6159ABc2bdfCC0E2b9Fe91D739006b41c1);
+    IWrappedHlpDepositor public immutable depositor;
 
     /// @notice GlueX router address
-    address public gluex = 0xe95F6EAeaE1E4d650576Af600b33D9F7e5f9f7fd;
+    address public immutable gluex;
 
     /// @notice address of the vault deposit token (USDhl)
-    address public usdhl = 0xb50A96253aBDF803D85efcDce07Ad8becBc52BD5;
+    address public immutable usdhl;
 
     /// @notice `lightlend` bytes
     bytes public communityCode = hex"6c696768746c656e64";
 
-    constructor() Ownable(msg.sender) {}
+    constructor(address _liquidSwapRouter, address _depositor, address _gluex, address _usdhl) Ownable(msg.sender) {
+        require(_liquidSwapRouter != address(0), "zero liquidSwapRouter");
+        require(_depositor != address(0), "zero depositor");
+        require(_gluex != address(0), "zero gluex");
+        require(_usdhl != address(0), "zero usdhl");
+        liquidSwapRouter = ILiquidSwap(_liquidSwapRouter);
+        depositor = IWrappedHlpDepositor(_depositor);
+        gluex = _gluex;
+        usdhl = _usdhl;
+    }
 
     /// @notice function used to swap from token X into USDhl and then deposit it into wHLP vault
     /// @param tokenIn token user is swapping to wHLP

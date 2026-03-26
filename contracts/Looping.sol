@@ -23,6 +23,8 @@ contract Looping is Ownable2Step, ReentrancyGuard {
     /// @notice address that receives referral rewards from the swapper
     address public referralAddress;
 
+    address private _pendingFlashloanUser;
+
     /// @param _pools array of whitelisted pools
     /// @param _swappers array of whitelisted swappers
     constructor(address[] memory _pools, address[] memory _swappers, address _owner) Ownable(_owner) {
@@ -92,7 +94,9 @@ contract Looping is Ownable2Step, ReentrancyGuard {
         //use flashloan to borrow _debtAsset
         uint256 repaymentAmount = _flashloanAmount - _initialAmount;
         bytes memory params = abi.encode(0, _yieldAsset, _swapper, _path, repaymentAmount, _minAmountOut, msg.sender, 0, _deadline);
+        _pendingFlashloanUser = msg.sender;
         IPool(_pool).flashLoanSimple(address(this), _debtAsset, _flashloanAmount, params, 0);
+        _pendingFlashloanUser = address(0);
     }
 
     /// @notice function used to close a leveraged position using a flashloan
@@ -125,7 +129,13 @@ contract Looping is Ownable2Step, ReentrancyGuard {
 
         //use flashloan to borrow _debtAsset
         bytes memory params = abi.encode(1, _yieldAsset, _swapper, _path, _flashloanAmount, _minAmountOut, msg.sender, _withdrawAmount, _deadline);
+        _pendingFlashloanUser = msg.sender;
         IPool(_pool).flashLoanSimple(address(this), _debtAsset, _flashloanAmount, params, 0);
+        _pendingFlashloanUser = address(0);
+
+        // Verify user's position health after close
+        (,,,,, uint256 healthFactor) = IPool(_pool).getUserAccountData(msg.sender);
+        require(healthFactor >= 1e18 || healthFactor == type(uint256).max, "position unhealthy after close");
     }
 
     /// @notice callback function called by pool contract during flashloan
@@ -146,6 +156,7 @@ contract Looping is Ownable2Step, ReentrancyGuard {
 
         //actionType: 0 = open position, 1 = close position
         ( uint8 actionType, address yieldAsset, address _swapper, , , , address user , ,) = abi.decode(params, (uint8, address, address, address[], uint256, uint256, address, uint256, uint256));
+        require(user == _pendingFlashloanUser, "user mismatch");
         require(swappers[_swapper], "callback: swapper not allowed");
 
         if (actionType == 0){
@@ -255,7 +266,9 @@ contract Looping is Ownable2Step, ReentrancyGuard {
         );
         uint256 balanceAfter = IERC20(path[path.length-1]).balanceOf(address(this));
 
-        return balanceAfter - balanceBefore;
+        uint256 amountOut = balanceAfter - balanceBefore;
+        require(amountOut >= minAmountOut, "insufficient swap output");
+        return amountOut;
     }
 
     /// @notice used to refund any tokens that would remain in the contract after the flashloan repayment
