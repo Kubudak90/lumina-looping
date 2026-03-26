@@ -1,4 +1,4 @@
-# HyperLend Looping Contracts
+# LightLend Looping Contracts
 
 ---
 

@@ -82,8 +82,8 @@ contract Looping is Ownable2Step, ReentrancyGuard {
         if (_startWithYield){
             //transfer initial _yieldAsset from user
             IERC20(_yieldAsset).safeTransferFrom(msg.sender, address(this), _initialAmount);
-            //swap from yieldAsset to debtAsset
-            _initialAmount = _swap(_swapper, _reversePath(_path), _initialAmount, _minInitialAmountOut, _deadline);
+            //swap from yieldAsset to debtAsset (path is already yield -> debt)
+            _initialAmount = _swap(_swapper, _path, _initialAmount, _minInitialAmountOut, _deadline);
         } else {
             //transfer initial _debtAsset from user
             IERC20(_debtAsset).safeTransferFrom(msg.sender, address(this), _initialAmount);

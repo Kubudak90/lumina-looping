@@ -6,7 +6,7 @@ async function main(){
     const owner = address3;
 
     const swapper = "0x85aA63EB2ab9BaAA74eAd7e7f82A571d74901853" //hyperswap
-    const pool = "0x1e85CCDf0D098a9f55b82F3E35013Eda235C8BD8" //hyperevm testnet deployment
+    const pool = "0x1e85CCDf0D098a9f55b82F3E35013Eda235C8BD8" //lighterEvm testnet deployment
 
     const Looping = await ethers.getContractFactory("Looping");
     const looping = await Looping.deploy(
