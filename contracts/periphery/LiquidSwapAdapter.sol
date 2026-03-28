@@ -7,7 +7,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {ILiquidSwap} from "../interfaces/ILiquidSwap.sol";
-import {IWrappedHype} from "../interfaces/IWrappedHype.sol";
+import {IWETH} from "../interfaces/IWrappedHype.sol";
 
 /// @title LiquidSwapAdapter
 /// @author LightLend
@@ -17,7 +17,7 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
 
     ILiquidSwap public immutable liquidSwapRouter;
 
-    IWrappedHype public immutable WHYPE;
+    IWETH public immutable WETH;
 
     /// @notice mapping of authorized callers
     mapping(address => bool) public authorizedCallers;
@@ -27,11 +27,11 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor(address _liquidSwapRouter, address _whype) Ownable(msg.sender) {
+    constructor(address _liquidSwapRouter, address _weth) Ownable(msg.sender) {
         require(_liquidSwapRouter != address(0), "zero liquidSwapRouter");
-        require(_whype != address(0), "zero whype");
+        require(_weth != address(0), "zero weth");
         liquidSwapRouter = ILiquidSwap(_liquidSwapRouter);
-        WHYPE = IWrappedHype(_whype);
+        WETH = IWETH(_weth);
     }
 
     /// @notice set authorized caller status
@@ -87,6 +87,9 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(liquidSwapRouter), amountIn);
 
+        uint256 balanceOutBefore = IERC20(tokenOut).balanceOf(address(this));
+        uint256 nativeBefore = address(this).balance;
+
         liquidSwapRouter.executeSwaps(
             tokens,
             amountIn,
@@ -97,11 +100,14 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
             owner()
         );
 
-        if (address(this).balance > 0) {
-            WHYPE.deposit{value: address(this).balance}();
+        IERC20(tokenIn).forceApprove(address(liquidSwapRouter), 0);
+
+        // Only wrap native balance delta (not pre-existing dust)
+        if (address(this).balance > nativeBefore) {
+            WETH.deposit{value: address(this).balance - nativeBefore}();
         }
 
-        uint256 balanceOut = IERC20(tokenOut).balanceOf(address(this));
+        uint256 balanceOut = IERC20(tokenOut).balanceOf(address(this)) - balanceOutBefore;
         require(balanceOut >= amountOutMin, "Swapper: insufficient output");
         IERC20(tokenOut).safeTransfer(to, balanceOut);
     }

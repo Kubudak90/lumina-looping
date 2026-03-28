@@ -93,10 +93,27 @@ contract Looping is Ownable2Step, ReentrancyGuard {
 
         //use flashloan to borrow _debtAsset
         uint256 repaymentAmount = _flashloanAmount - _initialAmount;
-        bytes memory params = abi.encode(0, _yieldAsset, _swapper, _path, repaymentAmount, _minAmountOut, msg.sender, 0, _deadline);
+
+        // Build the path for the flashloan callback (must be debt -> yield)
+        address[] memory flashloanPath;
+        if (_startWithYield) {
+            // _path is yield -> debt, but the flashloan callback needs debt -> yield
+            flashloanPath = new address[](_path.length);
+            for (uint256 i = 0; i < _path.length; i++) {
+                flashloanPath[i] = _path[_path.length - 1 - i];
+            }
+        } else {
+            flashloanPath = _path;
+        }
+
+        bytes memory params = abi.encode(0, _yieldAsset, _swapper, flashloanPath, repaymentAmount, _minAmountOut, msg.sender, 0, _deadline);
         _pendingFlashloanUser = msg.sender;
         IPool(_pool).flashLoanSimple(address(this), _debtAsset, _flashloanAmount, params, 0);
         _pendingFlashloanUser = address(0);
+
+        // Verify user's position health after open
+        (,,,,, uint256 healthFactor) = IPool(_pool).getUserAccountData(msg.sender);
+        require(healthFactor >= 1e18 || healthFactor == type(uint256).max, "position unhealthy after open");
     }
 
     /// @notice function used to close a leveraged position using a flashloan
@@ -159,6 +176,10 @@ contract Looping is Ownable2Step, ReentrancyGuard {
         require(user == _pendingFlashloanUser, "user mismatch");
         require(swappers[_swapper], "callback: swapper not allowed");
 
+        // Snapshot balances before position logic for delta-based refund
+        uint256 debtBefore = IERC20(debtAsset).balanceOf(address(this));
+        uint256 yieldBefore = IERC20(yieldAsset).balanceOf(address(this));
+
         if (actionType == 0){
             _executeOpenPosition(params, debtAsset, amount, premium);
         } else if (actionType == 1){
@@ -166,10 +187,10 @@ contract Looping is Ownable2Step, ReentrancyGuard {
         }
 
         //refund any leftover assets that would remain in the contract after flashloan repayment
-        _refund(debtAsset, yieldAsset, amount, premium, user);
+        _refund(debtAsset, yieldAsset, amount, premium, user, debtBefore, yieldBefore);
 
         //approve pool so it can pull the funds to repay the flashloan
-        IERC20(debtAsset).safeIncreaseAllowance(msg.sender, amount + premium);
+        IERC20(debtAsset).forceApprove(msg.sender, amount + premium);
 
         return true;
     }
@@ -197,7 +218,7 @@ contract Looping is Ownable2Step, ReentrancyGuard {
         uint256 yieldAmount = _swap(swapper, path, amount, minAmountOut, deadline);
 
         //supply yield tokens, note: msg.sender is now lending pool
-        IERC20(yieldAsset).safeIncreaseAllowance(msg.sender, yieldAmount);
+        IERC20(yieldAsset).forceApprove(msg.sender, yieldAmount);
         IPool(msg.sender).supply(yieldAsset, yieldAmount, user, 0);
 
         //borrow debt token, so we have enough to repay the flashloan
@@ -228,7 +249,7 @@ contract Looping is Ownable2Step, ReentrancyGuard {
         }
 
         //repay debt, note: msg.sender is now the lending pool
-        IERC20(debtAsset).safeIncreaseAllowance(msg.sender, repaymentAmount);
+        IERC20(debtAsset).forceApprove(msg.sender, repaymentAmount);
         IPool(msg.sender).repay(debtAsset, repaymentAmount, 2, user);
 
         //get address of the hToken and transfer it from user, so we can withdraw it
@@ -253,7 +274,7 @@ contract Looping is Ownable2Step, ReentrancyGuard {
     function _swap(address swapper, address[] memory path, uint256 amountToSwap, uint256 minAmountOut, uint256 deadline) internal returns (uint256) {
         require(swappers[swapper], "swapper not allowed");
 
-        IERC20(path[0]).safeIncreaseAllowance(swapper, amountToSwap);
+        IERC20(path[0]).forceApprove(swapper, amountToSwap);
 
         uint256 balanceBefore = IERC20(path[path.length-1]).balanceOf(address(this));
         ISwapper(swapper).swapExactTokensForTokensSupportingFeeOnTransferTokens(
@@ -268,6 +289,9 @@ contract Looping is Ownable2Step, ReentrancyGuard {
 
         uint256 amountOut = balanceAfter - balanceBefore;
         require(amountOut >= minAmountOut, "insufficient swap output");
+
+        IERC20(path[0]).forceApprove(swapper, 0);
+
         return amountOut;
     }
 
@@ -276,30 +300,23 @@ contract Looping is Ownable2Step, ReentrancyGuard {
     /// @param yieldAsset address of the token we want to supply
     /// @param amount amount of the debt token we owe from the flashloan
     /// @param premium amount of the premium we need to pay for the flashloan
-    function _refund(address debtAsset, address yieldAsset, uint256 amount, uint256 premium, address user) internal {
+    /// @param debtBefore debt asset balance snapshot taken after flashloan received (includes amount)
+    /// @param yieldBefore yield asset balance snapshot before position logic
+    function _refund(address debtAsset, address yieldAsset, uint256 amount, uint256 premium, address user, uint256 debtBefore, uint256 yieldBefore) internal {
         uint256 debtAssetBalance = IERC20(debtAsset).balanceOf(address(this));
         uint256 yieldAssetBalance = IERC20(yieldAsset).balanceOf(address(this));
 
-        if (debtAssetBalance > amount + premium){
-            IERC20(debtAsset).safeTransfer(user, debtAssetBalance - (amount + premium));
+        // debtBefore includes the flashloan amount + any pre-existing balance.
+        // Pre-existing balance = debtBefore - amount.
+        // We must keep (amount + premium) for repayment and not touch pre-existing balance.
+        // Refundable = debtAssetBalance - (amount + premium) - (debtBefore - amount)
+        //            = debtAssetBalance - premium - debtBefore
+        if (debtAssetBalance > debtBefore + premium){
+            IERC20(debtAsset).safeTransfer(user, debtAssetBalance - debtBefore - premium);
         }
-        if (yieldAssetBalance > 0){
-            IERC20(yieldAsset).safeTransfer(user, yieldAssetBalance);
+        if (yieldAssetBalance > yieldBefore){
+            IERC20(yieldAsset).safeTransfer(user, yieldAssetBalance - yieldBefore);
         }
-    }
-
-    /// @notice reverse an array of addresses
-    function _reversePath(address[] memory _array) internal pure returns(address[] memory) {
-        uint length = _array.length;
-        address[] memory reversedArray = new address[](length);
-        uint j = 0;
-
-        for(uint i = length; i >= 1; i--) {
-            reversedArray[j] = _array[i-1];
-            j++;
-        }
-
-        return reversedArray;
     }
 
     /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
@@ -308,16 +325,19 @@ contract Looping is Ownable2Step, ReentrancyGuard {
     
     /// @notice used to add or remove pools from the whitelist
     function setPool(address _pool, bool _isApproved) external onlyOwner(){
+        require(_pool != address(0), "zero address");
         pools[_pool] = _isApproved;
     }
 
     /// @notice used to add or remove swappers from the whitelist
     function setSwapper(address _swapper, bool _isApproved) external onlyOwner(){
+        require(_swapper != address(0), "zero address");
         swappers[_swapper] = _isApproved;
     }
 
     /// @notice used to update the swapper referral address
     function setReferralAddress(address _newReferralAddress) external onlyOwner(){
+        require(_newReferralAddress != address(0), "zero address");
         referralAddress = _newReferralAddress;
     }
 

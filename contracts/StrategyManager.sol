@@ -42,11 +42,6 @@ contract StrategyManager is Ownable2Step, ReentrancyGuard {
         debtAsset = _debtAsset;
     }
 
-    modifier onlyOwner2(){
-      require(msg.sender == owner(), "only owner");
-      _;
-    }
-
     function executeCall(address target, uint256 value, bytes memory data, bool allowRevert) public payable onlyOwner() nonReentrant returns (bytes memory) {
         return _executeCall(target, value, data, allowRevert);
     }
@@ -66,7 +61,7 @@ contract StrategyManager is Ownable2Step, ReentrancyGuard {
         return returnData;
     }
 
-    function cleanOutTokens(address[] memory tokens) external onlyOwner2() {
+    function cleanOutTokens(address[] memory tokens) external onlyOwner() {
         for (uint256 i = 0; i < tokens.length; i++){
             if (tokens[i] == address(0)){
                     (bool sent,) = owner().call{value: address(this).balance}("");
@@ -78,7 +73,7 @@ contract StrategyManager is Ownable2Step, ReentrancyGuard {
         }
     }
 
-    function withdrawAllFromPool(address[] calldata tokens) external onlyOwner2() {
+    function withdrawAllFromPool(address[] calldata tokens) external onlyOwner() {
         for (uint256 i = 0; i < tokens.length; i++){
             IPool(pool).withdraw(tokens[i], type(uint256).max, owner());
         }

@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import {IWrappedHype} from "../interfaces/IWrappedHype.sol";
+import {IWETH} from "../interfaces/IWrappedHype.sol";
 
 /// @title GluexAdapter
 /// @author LightLend
@@ -17,8 +17,8 @@ contract GluexAdapter is ReentrancyGuard {
     /// @notice GlueX router address
     address public immutable gluex;
 
-    /// @notice wrapped hype
-    IWrappedHype public immutable WHYPE;
+    /// @notice wrapped ETH
+    IWETH public immutable WETH;
 
     /// @notice owner of the contract
     address public owner;
@@ -35,11 +35,11 @@ contract GluexAdapter is ReentrancyGuard {
         _;
     }
 
-    constructor(address _gluex, address _whype) {
+    constructor(address _gluex, address _weth) {
         require(_gluex != address(0), "zero gluex");
-        require(_whype != address(0), "zero whype");
+        require(_weth != address(0), "zero weth");
         gluex = _gluex;
-        WHYPE = IWrappedHype(_whype);
+        WETH = IWETH(_weth);
         owner = msg.sender;
     }
 
@@ -128,16 +128,20 @@ contract GluexAdapter is ReentrancyGuard {
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(gluex), amountIn);
 
+        uint256 balanceOutBefore = IERC20(tokenOut).balanceOf(address(this));
+        uint256 nativeBefore = address(this).balance;
+
         (bool success, ) = gluex.call(gluexCallData);
         require(success, "GluexAdapter: gluex swap failed");
 
         IERC20(tokenIn).forceApprove(address(gluex), 0);
 
-        if (address(this).balance > 0) {
-            WHYPE.deposit{value: address(this).balance}();
+        // Only wrap native balance delta (not pre-existing dust)
+        if (address(this).balance > nativeBefore) {
+            WETH.deposit{value: address(this).balance - nativeBefore}();
         }
 
-        uint256 balanceOut = IERC20(tokenOut).balanceOf(address(this));
+        uint256 balanceOut = IERC20(tokenOut).balanceOf(address(this)) - balanceOutBefore;
         require(
             balanceOut >= amountOutMin,
             "GluexAdapter: minAmountOut > balanceOut"
@@ -169,7 +173,7 @@ contract GluexAdapter is ReentrancyGuard {
             storedCaller := tload(callerSlot)
         }
         require(storedCaller != address(0), "GluexAdapter: no caller recorded");
-        require(authorizedCallers[storedCaller] || storedCaller == owner, "GluexAdapter: unauthorized caller");
+        require(storedCaller == msg.sender, "GluexAdapter: caller mismatch");
 
         // Load data length from transient storage
         uint256 dataLength;

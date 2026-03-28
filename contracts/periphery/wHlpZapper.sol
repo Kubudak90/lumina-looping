@@ -8,45 +8,50 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {ILiquidSwap} from "../interfaces/ILiquidSwap.sol";
-import {IWrappedHlpDepositor} from "../interfaces/IWrappedHlpDepositor.sol";
+import {IVaultDepositor} from "../interfaces/IWrappedHlpDepositor.sol";
 
-/// @title wHlpZapper
+/// @title VaultZapper
 /// @author LightLend
-/// @notice Contract used to swap tokens to USDhl before depositing them to wHLP
-contract wHlpZapper is ReentrancyGuard, Ownable {
+/// @notice Contract used to swap tokens to deposit token before depositing them to vault
+contract VaultZapper is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
     /// @notice liquid swap router
     ILiquidSwap public immutable liquidSwapRouter;
 
-    /// @notice wrapped HLP depositor
-    IWrappedHlpDepositor public immutable depositor;
+    /// @notice vault depositor
+    IVaultDepositor public immutable depositor;
 
     /// @notice GlueX router address
     address public immutable gluex;
 
-    /// @notice address of the vault deposit token (USDhl)
-    address public immutable usdhl;
+    /// @notice address of the vault deposit token
+    address public immutable depositToken;
+
+    /// @notice address of the vault share token
+    address public immutable vaultToken;
 
     /// @notice `lightlend` bytes
     bytes public communityCode = hex"6c696768746c656e64";
 
-    constructor(address _liquidSwapRouter, address _depositor, address _gluex, address _usdhl) Ownable(msg.sender) {
+    constructor(address _liquidSwapRouter, address _depositor, address _gluex, address _depositToken, address _vaultToken) Ownable(msg.sender) {
         require(_liquidSwapRouter != address(0), "zero liquidSwapRouter");
         require(_depositor != address(0), "zero depositor");
         require(_gluex != address(0), "zero gluex");
-        require(_usdhl != address(0), "zero usdhl");
+        require(_depositToken != address(0), "zero depositToken");
+        require(_vaultToken != address(0), "zero vaultToken");
         liquidSwapRouter = ILiquidSwap(_liquidSwapRouter);
-        depositor = IWrappedHlpDepositor(_depositor);
+        depositor = IVaultDepositor(_depositor);
         gluex = _gluex;
-        usdhl = _usdhl;
+        depositToken = _depositToken;
+        vaultToken = _vaultToken;
     }
 
-    /// @notice function used to swap from token X into USDhl and then deposit it into wHLP vault
-    /// @param tokenIn token user is swapping to wHLP
+    /// @notice function used to swap from token X into deposit token and then deposit it into vault
+    /// @param tokenIn token user is swapping to vault
     /// @param amountIn amount of the input token
-    /// @param amountOutMin minimum USDhl amount after the swap
-    /// @param minimumMint minimum wHLP shares received
+    /// @param amountOutMin minimum deposit token amount after the swap
+    /// @param minimumMint minimum vault shares received
     /// @param deadline swap deadline
     /// @param tokens list of tokens in LiquisSwap swap
     /// @param hops list of hops in LiquisSwap swap
@@ -61,10 +66,13 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
         uint256 expectedAmountOut,
         uint256 feeBps
     ) external nonReentrant returns (uint256 sharesReceived) {
-        require(block.timestamp < deadline, "wHlpZapper: expired");
+        require(block.timestamp < deadline, "VaultZapper: expired");
 
+        uint256 tokenInBefore = IERC20(tokenIn).balanceOf(address(this));
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(liquidSwapRouter), amountIn);
+
+        uint256 depositTokenBefore = IERC20(depositToken).balanceOf(address(this));
 
         liquidSwapRouter.executeSwaps(
             tokens,
@@ -79,28 +87,37 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
         // Reset residual approval after swap
         IERC20(tokenIn).forceApprove(address(liquidSwapRouter), 0);
 
-        uint256 balanceOut = IERC20(usdhl).balanceOf(address(this));
+        // Calculate deposit token delta BEFORE tokenIn refund (critical when tokenIn == depositToken)
+        uint256 balanceOut = IERC20(depositToken).balanceOf(address(this)) - depositTokenBefore;
+
+        // Refund only the delta of residual tokenIn (not pre-existing dust)
+        uint256 tokenInAfter = IERC20(tokenIn).balanceOf(address(this));
+        if (tokenInAfter > tokenInBefore) {
+            IERC20(tokenIn).safeTransfer(msg.sender, tokenInAfter - tokenInBefore);
+        }
         require(
             balanceOut >= amountOutMin,
-            "wHlpZapper: minAmountOut > balanceOut"
+            "VaultZapper: minAmountOut > balanceOut"
         );
 
-        IERC20(usdhl).forceApprove(address(depositor), balanceOut);
+        IERC20(depositToken).forceApprove(address(depositor), balanceOut);
+        uint256 sharesBefore = IERC20(vaultToken).balanceOf(msg.sender);
         depositor.deposit(
-            usdhl,
+            depositToken,
             balanceOut,
             minimumMint,
             msg.sender,
             communityCode
         );
+        sharesReceived = IERC20(vaultToken).balanceOf(msg.sender) - sharesBefore;
     }
 
-    /// @notice function used to swap from token X into USDhl via Gluex and then deposit it into wHLP vault
+    /// @notice function used to swap from token X into deposit token via Gluex and then deposit it into vault
     /// @param tokenIn The token to swap from
     /// @param amountIn The amount of tokenIn to swap
     /// @param gluexData The encoded calldata for the call to be executed by the GlueX contract
-    /// @param amountOutMin The minimum amount of USDhl to receive
-    /// @param minimumMint The minimum amount of wHLP shares to receive
+    /// @param amountOutMin The minimum amount of deposit token to receive
+    /// @param minimumMint The minimum amount of vault shares to receive
     /// @param deadline The deadline for the transaction
     function zapInGluex(
         address tokenIn,
@@ -110,17 +127,17 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
         uint256 minimumMint,
         uint256 deadline
     ) external payable nonReentrant {
-        require(block.timestamp < deadline, "wHlpZapper: expired");
+        require(block.timestamp < deadline, "VaultZapper: expired");
 
         if (tokenIn == address(0)) {
             require(
                 msg.value == amountIn,
-                "wHlpZapper: msg.value must match amountIn for ETH zap"
+                "VaultZapper: msg.value must match amountIn for ETH zap"
             );
         } else {
             require(
                 msg.value == 0,
-                "wHlpZapper: msg.value must be 0 for token zap"
+                "VaultZapper: msg.value must be 0 for token zap"
             );
             IERC20(tokenIn).safeTransferFrom(
                 msg.sender,
@@ -130,30 +147,38 @@ contract wHlpZapper is ReentrancyGuard, Ownable {
             IERC20(tokenIn).forceApprove(address(gluex), amountIn);
         }
 
-        uint256 balanceBefore = IERC20(usdhl).balanceOf(address(this));
+        uint256 balanceBefore = IERC20(depositToken).balanceOf(address(this));
+        uint256 ethBefore = address(this).balance - msg.value;
 
         (bool success, ) = gluex.call{value: msg.value}(gluexData);
-        require(success, "wHlpZapper: gluex swap failed");
+        require(success, "VaultZapper: gluex swap failed");
 
         if (tokenIn != address(0)) {
             IERC20(tokenIn).forceApprove(address(gluex), 0);
         }
 
-        uint256 receivedUsdhl = IERC20(usdhl).balanceOf(address(this)) -
+        uint256 receivedDepositToken = IERC20(depositToken).balanceOf(address(this)) -
             balanceBefore;
         require(
-            receivedUsdhl >= amountOutMin,
-            "wHlpZapper: insufficient amount out"
+            receivedDepositToken >= amountOutMin,
+            "VaultZapper: insufficient amount out"
         );
 
-        IERC20(usdhl).forceApprove(address(depositor), receivedUsdhl);
+        IERC20(depositToken).forceApprove(address(depositor), receivedDepositToken);
         depositor.deposit(
-            usdhl,
-            receivedUsdhl,
+            depositToken,
+            receivedDepositToken,
             minimumMint,
             msg.sender,
             communityCode
         );
+
+        // Refund any remaining native ETH to user (delta only)
+        uint256 remainingEth = address(this).balance - ethBefore;
+        if (remainingEth > 0) {
+            (bool refundSuccess, ) = payable(msg.sender).call{value: remainingEth}("");
+            require(refundSuccess, "ETH refund failed");
+        }
     }
 
     /// @notice used to rescue stuck tokens that were sent to the contract by mistake
