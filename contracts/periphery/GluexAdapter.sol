@@ -45,6 +45,7 @@ contract GluexAdapter is ReentrancyGuard {
 
     /// @notice set authorized caller status
     function setAuthorizedCaller(address _caller, bool _status) external onlyOwner {
+        require(_caller != address(0), "zero address");
         authorizedCallers[_caller] = _status;
     }
 
@@ -70,26 +71,31 @@ contract GluexAdapter is ReentrancyGuard {
     }
 
     /// @notice used to preset the swap route calldata, which will then be used in the swap function.
-    /// @dev This must be called in the same transaction as the swap.
+    /// @dev Must be called in the same transaction as the swap. `executor` is the contract that
+    ///      will call `swapExactTokensForTokens...` (Looping), not the StrategyManager that sets the path.
     /// @param tokenIn The input token of the swap.
     /// @param tokenOut The output token of the swap.
     /// @param gluexData The raw calldata to be sent to the GlueX router to perform the swap.
-    function setSwapPath(
-        address tokenIn,
-        address tokenOut,
-        bytes calldata gluexData
-    ) external onlyAuthorized {
+    /// @param executor Authorized contract allowed to consume this route (typically Looping).
+    function setSwapPath(address tokenIn, address tokenOut, bytes calldata gluexData, address executor)
+        external
+        onlyAuthorized
+    {
+        require(tokenIn != address(0) && tokenOut != address(0), "zero token");
+        require(tokenIn != tokenOut, "same token");
+        require(gluexData.length > 0, "empty path");
+        require(executor != address(0), "zero executor");
+        require(authorizedCallers[executor] || executor == owner, "executor not authorized");
+
         // Generate unique slots for this token pair in transient storage
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
-        bytes32 blockSlot = keccak256(abi.encodePacked(baseSlot, "block"));
         bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
 
         assembly {
-            tstore(blockSlot, number())
-            tstore(callerSlot, caller())
+            tstore(callerSlot, executor)
             tstore(baseSlot, gluexData.length)
         }
-        
+
         // Store data in chunks of 32 bytes
         uint256 length = gluexData.length;
         for (uint256 i = 0; i < length; i += 32) {
@@ -110,13 +116,14 @@ contract GluexAdapter is ReentrancyGuard {
     /// @param to The recipient of the output tokens.
     /// @param deadline The deadline for the transaction.
     function swapExactTokensForTokensSupportingFeeOnTransferTokens(
-        uint amountIn,
-        uint amountOutMin,
+        uint256 amountIn,
+        uint256 amountOutMin,
         address[] calldata path,
         address to,
         address, // referrer; unused in this implementation
-        uint deadline
+        uint256 deadline
     ) external nonReentrant onlyAuthorized {
+        require(path.length >= 2, "GluexAdapter: invalid path");
         require(block.timestamp < deadline, "GluexAdapter: expired");
 
         address tokenIn = path[0];
@@ -131,7 +138,7 @@ contract GluexAdapter is ReentrancyGuard {
         uint256 balanceOutBefore = IERC20(tokenOut).balanceOf(address(this));
         uint256 nativeBefore = address(this).balance;
 
-        (bool success, ) = gluex.call(gluexCallData);
+        (bool success,) = gluex.call(gluexCallData);
         require(success, "GluexAdapter: gluex swap failed");
 
         IERC20(tokenIn).forceApprove(address(gluex), 0);
@@ -142,10 +149,7 @@ contract GluexAdapter is ReentrancyGuard {
         }
 
         uint256 balanceOut = IERC20(tokenOut).balanceOf(address(this)) - balanceOutBefore;
-        require(
-            balanceOut >= amountOutMin,
-            "GluexAdapter: minAmountOut > balanceOut"
-        );
+        require(balanceOut >= amountOutMin, "GluexAdapter: minAmountOut > balanceOut");
         IERC20(tokenOut).safeTransfer(to, balanceOut);
     }
 
@@ -156,24 +160,18 @@ contract GluexAdapter is ReentrancyGuard {
     function _loadSwapData(address tokenIn, address tokenOut) internal returns (bytes memory) {
         // Generate unique slots for this token pair in transient storage
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
-        bytes32 blockSlot = keccak256(abi.encodePacked(baseSlot, "block"));
         bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
 
-        uint256 storedBlock;
+        address storedExecutor;
         assembly {
-            storedBlock := tload(blockSlot)
+            storedExecutor := tload(callerSlot)
         }
-        require(
-            storedBlock == block.number,
-            "GluexAdapter: path not set in this block"
-        );
-
-        address storedCaller;
+        require(storedExecutor != address(0), "GluexAdapter: no executor recorded");
+        require(storedExecutor == msg.sender, "GluexAdapter: executor mismatch");
+        // Consume so the route cannot be replayed in this transaction.
         assembly {
-            storedCaller := tload(callerSlot)
+            tstore(callerSlot, 0)
         }
-        require(storedCaller != address(0), "GluexAdapter: no caller recorded");
-        require(storedCaller == msg.sender, "GluexAdapter: caller mismatch");
 
         // Load data length from transient storage
         uint256 dataLength;
@@ -181,7 +179,7 @@ contract GluexAdapter is ReentrancyGuard {
             dataLength := tload(baseSlot)
         }
         require(dataLength > 0, "GluexAdapter: path data is empty");
-        
+
         // Reconstruct the calldata from transient storage
         bytes memory gluexCallData = new bytes(dataLength);
         for (uint256 i = 0; i < dataLength; i += 32) {
@@ -189,22 +187,33 @@ contract GluexAdapter is ReentrancyGuard {
             assembly {
                 chunk := tload(add(baseSlot, add(1, div(i, 32))))
             }
-            
+
             assembly {
                 mstore(add(add(gluexCallData, 0x20), i), chunk)
             }
         }
-        
+
         return gluexCallData;
     }
 
     /// @notice Gets the stored GlueX calldata for a given token pair from transient storage.
-    /// @dev Only works within the same transaction where setSwapPath was called
-    function getSwapRoute(
-        address tokenIn,
-        address tokenOut
-    ) external returns (bytes memory) {
-        return _loadSwapData(tokenIn, tokenOut);
+    /// @dev Read-only; does not consume the route or require the caller to be the executor.
+    function getSwapRoute(address tokenIn, address tokenOut) external view returns (bytes memory gluexCallData) {
+        bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
+        uint256 dataLength;
+        assembly {
+            dataLength := tload(baseSlot)
+        }
+        gluexCallData = new bytes(dataLength);
+        for (uint256 i = 0; i < dataLength; i += 32) {
+            bytes32 chunk;
+            assembly {
+                chunk := tload(add(baseSlot, add(1, div(i, 32))))
+            }
+            assembly {
+                mstore(add(add(gluexCallData, 0x20), i), chunk)
+            }
+        }
     }
 
     /// @notice rescue stuck tokens from the contract
@@ -216,7 +225,7 @@ contract GluexAdapter is ReentrancyGuard {
         }
         uint256 ethBalance = address(this).balance;
         if (ethBalance > 0) {
-            (bool success, ) = _to.call{value: ethBalance}("");
+            (bool success,) = _to.call{value: ethBalance}("");
             require(success, "ETH transfer failed");
         }
     }
