@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: forge build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@8f1998e9878d786675189ef566a2e4bf24869773
+        with:
+          version: v1.3.5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "20.18.1"
+          cache: npm
+      - name: Install npm deps
+        run: npm ci
+      - name: Install forge-std
+        run: forge install foundry-rs/forge-std --no-commit
+      - name: Forge fmt
+        run: forge fmt --check scripts/DeployLighterEVM.s.sol
+      - name: Forge build
+        run: forge build
+      - name: Forge tests
+        run: |
+          if [ -d test ] && [ -n "$(ls -A test 2>/dev/null || true)" ]; then
+            forge test -vv
+          else
+            echo "No tests yet; build-only gate"
+          fi
