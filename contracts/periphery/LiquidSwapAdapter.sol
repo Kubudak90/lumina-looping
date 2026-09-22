@@ -36,6 +36,7 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
 
     /// @notice set authorized caller status
     function setAuthorizedCaller(address _caller, bool _status) external onlyOwner {
+        require(_caller != address(0), "zero address");
         authorizedCallers[_caller] = _status;
     }
 
@@ -43,13 +44,17 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         address[] calldata tokens,
         address tokenIn,
         address tokenOut,
-        ILiquidSwap.Swap[][] calldata hops
+        ILiquidSwap.Swap[][] calldata hops,
+        address executor
     ) external onlyAuthorized {
+        require(tokenIn != address(0) && tokenOut != address(0), "zero token");
+        require(executor != address(0), "zero executor");
+        require(authorizedCallers[executor] || executor == owner(), "executor not authorized");
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
         bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
         assembly {
             tstore(baseSlot, number())
-            tstore(callerSlot, caller())
+            tstore(callerSlot, executor)
         }
         _storeTokens(baseSlot, tokens);
         _storeHops(baseSlot, hops);
@@ -78,8 +83,11 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         assembly {
             storedCaller := tload(callerSlot)
         }
-        require(storedCaller != address(0), "Swapper: no caller recorded");
-        require(authorizedCallers[storedCaller] || storedCaller == owner(), "Swapper: unauthorized caller");
+        require(storedCaller != address(0), "Swapper: no executor recorded");
+        require(storedCaller == msg.sender, "Swapper: executor mismatch");
+        assembly {
+            tstore(callerSlot, 0)
+        }
 
         address[] memory tokens = _loadTokens(baseSlot);
         ILiquidSwap.Swap[][] memory hops = _loadHops(baseSlot);
