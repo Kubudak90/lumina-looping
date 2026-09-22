@@ -66,7 +66,8 @@ contract VaultZapper is ReentrancyGuard, Ownable {
         uint256 expectedAmountOut,
         uint256 feeBps
     ) external nonReentrant returns (uint256 sharesReceived) {
-        require(block.timestamp < deadline, "VaultZapper: expired");
+        // Inclusive, matching Looping's `block.timestamp <= deadline`.
+        require(block.timestamp <= deadline, "VaultZapper: expired");
 
         uint256 tokenInBefore = IERC20(tokenIn).balanceOf(address(this));
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
@@ -127,7 +128,8 @@ contract VaultZapper is ReentrancyGuard, Ownable {
         uint256 minimumMint,
         uint256 deadline
     ) external payable nonReentrant {
-        require(block.timestamp < deadline, "VaultZapper: expired");
+        // Inclusive, matching Looping's `block.timestamp <= deadline`.
+        require(block.timestamp <= deadline, "VaultZapper: expired");
 
         if (tokenIn == address(0)) {
             require(
