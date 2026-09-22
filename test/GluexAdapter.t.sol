@@ -23,7 +23,7 @@ contract RouteHarness {
         address[] calldata path,
         uint256 deadline
     ) external {
-        adapter.setSwapPath(tokenIn, tokenOut, gluexData, executor);
+        adapter.setSwapPath(tokenIn, tokenOut, gluexData, amountIn, executor);
         (bool ok, bytes memory data) = executor.call(
             abi.encodeWithSelector(GluexExecutor.swap.selector, amountIn, minOut, path, executor, deadline)
         );
@@ -98,7 +98,7 @@ contract GluexAdapterTest is Test {
     function test_revertIfExecutorMismatch() public {
         bytes memory data = _gluexData(1 ether, 1 ether);
         adapter.setAuthorizedCaller(address(this), true);
-        adapter.setSwapPath(address(tokenIn), address(tokenOut), data, address(looping));
+        adapter.setSwapPath(address(tokenIn), address(tokenOut), data, 1 ether, address(looping));
         address[] memory path = _path();
         vm.expectRevert("GluexAdapter: executor mismatch");
         adapter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
@@ -109,7 +109,7 @@ contract GluexAdapterTest is Test {
     function test_revertIfExecutorNotAuthorized() public {
         bytes memory data = _gluexData(1 ether, 1 ether);
         vm.expectRevert("executor not authorized");
-        adapter.setSwapPath(address(tokenIn), address(tokenOut), data, address(0xBEEF));
+        adapter.setSwapPath(address(tokenIn), address(tokenOut), data, 1 ether, address(0xBEEF));
     }
 
     function test_revertOnReplay() public {
@@ -135,12 +135,20 @@ contract GluexAdapterTest is Test {
         assertEq(tokenOut.balanceOf(address(looping)), 1 ether);
     }
 
-    function test_recordedCalldataDoesNotBindAmountIn() public {
+    function test_revertIfAmountInMismatch() public {
         bytes memory data = _gluexData(1 ether, 1 ether);
+        adapter.setSwapPath(address(tokenIn), address(tokenOut), data, 1 ether, address(looping));
+        vm.expectRevert("GluexAdapter: amount mismatch");
+        looping.swap(5 ether, 1 ether, _path(), address(looping), block.timestamp + 1);
+        assertEq(tokenIn.balanceOf(address(adapter)), 0);
+    }
+
+    function test_deadlineEqualToTimestampIsAllowed() public {
+        uint256 amountIn = 1 ether;
+        bytes memory data = _gluexData(amountIn, 1 ether);
         setter.setThenSwapAs(
-            address(looping), address(tokenIn), address(tokenOut), data, 5 ether, 1 ether, _path(), block.timestamp + 1
+            address(looping), address(tokenIn), address(tokenOut), data, amountIn, 1 ether, _path(), block.timestamp
         );
-        assertEq(tokenIn.balanceOf(address(adapter)), 4 ether);
         assertEq(tokenOut.balanceOf(address(looping)), 1 ether);
     }
 }

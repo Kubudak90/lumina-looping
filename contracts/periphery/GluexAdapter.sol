@@ -76,23 +76,30 @@ contract GluexAdapter is ReentrancyGuard {
     /// @param tokenIn The input token of the swap.
     /// @param tokenOut The output token of the swap.
     /// @param gluexData The raw calldata to be sent to the GlueX router to perform the swap.
+    /// @param amountIn Exact input the executor must later pass. A different amount cannot consume this route.
     /// @param executor Authorized contract allowed to consume this route (typically Looping).
-    function setSwapPath(address tokenIn, address tokenOut, bytes calldata gluexData, address executor)
-        external
-        onlyAuthorized
-    {
+    function setSwapPath(
+        address tokenIn,
+        address tokenOut,
+        bytes calldata gluexData,
+        uint256 amountIn,
+        address executor
+    ) external onlyAuthorized {
         require(tokenIn != address(0) && tokenOut != address(0), "zero token");
         require(tokenIn != tokenOut, "same token");
         require(gluexData.length > 0, "empty path");
+        require(amountIn > 0, "GluexAdapter: zero amount");
         require(executor != address(0), "zero executor");
         require(authorizedCallers[executor] || executor == owner, "executor not authorized");
 
         // Generate unique slots for this token pair in transient storage
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
         bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
+        bytes32 amountSlot = keccak256(abi.encodePacked(baseSlot, "amount"));
 
         assembly {
             tstore(callerSlot, executor)
+            tstore(amountSlot, amountIn)
             tstore(baseSlot, gluexData.length)
         }
 
@@ -124,13 +131,15 @@ contract GluexAdapter is ReentrancyGuard {
         uint256 deadline
     ) external nonReentrant onlyAuthorized {
         require(path.length >= 2, "GluexAdapter: invalid path");
-        require(block.timestamp < deadline, "GluexAdapter: expired");
+        require(amountIn > 0, "GluexAdapter: zero amount");
+        // Inclusive, matching Looping's `block.timestamp <= deadline`.
+        require(block.timestamp <= deadline, "GluexAdapter: expired");
 
         address tokenIn = path[0];
         address tokenOut = path[path.length - 1];
 
         // Load and validate swap data from transient storage
-        bytes memory gluexCallData = _loadSwapData(tokenIn, tokenOut);
+        bytes memory gluexCallData = _loadSwapData(tokenIn, tokenOut, amountIn);
 
         IERC20(tokenIn).safeTransferFrom(msg.sender, address(this), amountIn);
         IERC20(tokenIn).forceApprove(address(gluex), amountIn);
@@ -156,8 +165,9 @@ contract GluexAdapter is ReentrancyGuard {
     /// @notice Internal function to load swap data from transient storage
     /// @param tokenIn The input token
     /// @param tokenOut The output token
+    /// @param amountIn Exact input that must match the amount stored with the route
     /// @return gluexCallData The swap calldata
-    function _loadSwapData(address tokenIn, address tokenOut) internal returns (bytes memory) {
+    function _loadSwapData(address tokenIn, address tokenOut, uint256 amountIn) internal returns (bytes memory) {
         // Generate unique slots for this token pair in transient storage
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
         bytes32 callerSlot = keccak256(abi.encodePacked(baseSlot, "caller"));
@@ -168,9 +178,18 @@ contract GluexAdapter is ReentrancyGuard {
         }
         require(storedExecutor != address(0), "GluexAdapter: no executor recorded");
         require(storedExecutor == msg.sender, "GluexAdapter: executor mismatch");
+
+        bytes32 amountSlot = keccak256(abi.encodePacked(baseSlot, "amount"));
+        uint256 storedAmount;
+        assembly {
+            storedAmount := tload(amountSlot)
+        }
+        require(storedAmount == amountIn, "GluexAdapter: amount mismatch");
+
         // Consume so the route cannot be replayed in this transaction.
         assembly {
             tstore(callerSlot, 0)
+            tstore(amountSlot, 0)
         }
 
         // Load data length from transient storage
