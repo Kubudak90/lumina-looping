@@ -123,4 +123,24 @@ contract GluexAdapterTest is Test {
         vm.expectRevert("GluexAdapter: no executor recorded");
         looping.swap(amountIn, 1 ether, _path(), address(looping), block.timestamp + 1);
     }
+
+    function test_nativeDustNotWrappedIntoSwapOutput() public {
+        vm.deal(address(adapter), 1 ether);
+        uint256 amountIn = 1 ether;
+        bytes memory data = _gluexData(amountIn, 1 ether);
+        setter.setThenSwapAs(
+            address(looping), address(tokenIn), address(tokenOut), data, amountIn, 1 ether, _path(), block.timestamp + 1
+        );
+        assertEq(address(adapter).balance, 1 ether);
+        assertEq(tokenOut.balanceOf(address(looping)), 1 ether);
+    }
+
+    function test_recordedCalldataDoesNotBindAmountIn() public {
+        bytes memory data = _gluexData(1 ether, 1 ether);
+        setter.setThenSwapAs(
+            address(looping), address(tokenIn), address(tokenOut), data, 5 ether, 1 ether, _path(), block.timestamp + 1
+        );
+        assertEq(tokenIn.balanceOf(address(adapter)), 4 ether);
+        assertEq(tokenOut.balanceOf(address(looping)), 1 ether);
+    }
 }
