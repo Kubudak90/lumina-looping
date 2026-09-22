@@ -68,7 +68,8 @@ contract LiquidSwapAdapter is ReentrancyGuard, Ownable {
         address, // referrer (unused)
         uint256 deadline
     ) external nonReentrant onlyAuthorized {
-        require(block.timestamp < deadline, "Swapper: expired");
+        // Inclusive, matching Looping's `block.timestamp <= deadline`.
+        require(block.timestamp <= deadline, "Swapper: expired");
         address tokenIn = path[0];
         address tokenOut = path[path.length - 1];
         bytes32 baseSlot = keccak256(abi.encodePacked(tokenIn, tokenOut));
