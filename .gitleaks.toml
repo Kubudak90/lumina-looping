@@ -1,0 +1,27 @@
+# gitleaks configuration (OPS-02). The same base is used in all six Lumina repos; only the
+# repo-specific allowlists at the end differ. CI (.github/workflows) runs `gitleaks git` over the
+# full history with --redact and a pinned, sha256-verified gitleaks, after a self-test that proves
+# this file still catches a fake key and still ignores a plain address.
+title = "lumina-looping"
+
+[extend]
+# Start from gitleaks' built-in rules.
+useDefault = true
+
+# EVM private key: 64 hex characters, with or without 0x, right after a name containing
+# key / private / secret / mnemonic / seed / pk, e.g. `PRIVATE_KEY=0x…`, `"privateKey": "…"`,
+# `deployer_pk: …`, `--private-key 0x…`. No entropy floor: a low-entropy key is still a key.
+[[rules]]
+id = "evm-private-key"
+description = "EVM private key (32 bytes of hex) assigned to a key/secret-like name"
+regex = '''(?i)(?:key|private|secret|mnemonic|seed|pk)[a-z0-9_.\-]{0,32}["'`]?\s*(?::=|=>|[:=,(]|\s)\s*["'`]?((?:0x)?[0-9a-f]{64})(?:[^0-9a-z]|$)'''
+secretGroup = 1
+keywords = ["key", "private", "secret", "mnemonic", "seed", "pk"]
+
+# A bare 20-byte EVM address is public data. The regex is anchored and tested against the
+# extracted secret only, so a 32-byte key (which contains many 40-hex substrings) is never
+# allowlisted. Do not unanchor it: the old `0x[a-fA-F0-9]{40}` allowlisted leaked keys.
+[[allowlists]]
+description = "Public 20-byte EVM addresses (exact match only)"
+regexTarget = "secret"
+regexes = ['''^0x[a-fA-F0-9]{40}$''']
