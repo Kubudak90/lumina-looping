@@ -18,6 +18,81 @@ regex = '''(?i)(?:key|private|secret|mnemonic|seed|pk)[a-z0-9_.\-]{0,32}["'`]?\s
 secretGroup = 1
 keywords = ["key", "private", "secret", "mnemonic", "seed", "pk"]
 
+# Hardhat / config accounts arrays, e.g. `accounts: ["0x…"]` (single-line or multi-line).
+[[rules]]
+id = "evm-private-key-hardhat-accounts"
+description = "EVM private key literal inside an accounts array (e.g. Hardhat network config)"
+regex = '''(?i)(?:^|[^a-z0-9_])accounts["'`]?\s*[:=]\s*\[(?:[^\]\[]*[^0-9a-z])?((?:0x)?[0-9a-f]{64})(?:[^0-9a-z]|$)'''
+secretGroup = 1
+keywords = ["accounts"]
+
+# Wallet / SigningKey constructors, e.g. `new ethers.Wallet("0x…")` or `new Wallet("0x…")`.
+[[rules]]
+id = "evm-private-key-wallet-ctor"
+description = "EVM private key literal passed to a Wallet or SigningKey constructor"
+regex = '''(?i)(?:^|[^a-z0-9_])(?:new\s+)?(?:[a-z0-9_$]+\.)?(?:Wallet|SigningKey)\s*\(\s*["'`]?((?:0x)?[0-9a-f]{64})(?:[^0-9a-z]|$)'''
+secretGroup = 1
+keywords = ["wallet", "signingkey"]
+
+# Signer/role assignments across .env, JSON, TOML, YAML (inline or next-line list), and JS fallbacks.
+[[rules]]
+id = "evm-private-key-role-assignment"
+description = "EVM private key assigned to a signer/role/account name in env, JSON, TOML, YAML, or JS fallback"
+regex = '''(?i)(?:^|[^a-z0-9_])(?:deployer|signer|signers|keeper|liquidator|relayer|operator|validator|funder|wallet|accounts|private_?key|priv_?key|secret_?key|signing_?key|bot_?key|owner_?key|admin_?key|guardian_?key)(?:_(?:key|pk|priv|private|secret|wallet|signer|account|[0-9]{1,2}))?["'`]?[ \t]*(?::=|=>|\|\||\?\?|[:=])[ \t]*(?:\r?\n[ \t]+(?:-[ \t]+[^\r\n]*\r?\n[ \t]+)*(?:-[ \t]+)?|-[ \t]+)?["'`]?((?:0x)?[0-9a-f]{64})(?:[^0-9a-z]|$)'''
+secretGroup = 1
+keywords = [
+  "deployer",
+  "signer",
+  "keeper",
+  "liquidator",
+  "relayer",
+  "operator",
+  "validator",
+  "funder",
+  "wallet",
+  "accounts",
+  "private",
+  "priv",
+  "secret",
+  "signing",
+  "key",
+]
+
+# Markdown notes, tables, and prose (the shape of the March leak).
+[[rules]]
+id = "evm-private-key-markdown-prose"
+description = "EVM private key written in markdown, tables, or prose notes"
+regex = '''(?i)(?:(?:private|secret|signing|deployer|keeper|liquidator|signer|wallet|owner|master|raw|hex|evm|eth)[ \t_-]+key(?:[ \t]*\([^)\r\n]*\))?|privkey|privatekey|(?:\*\*|__|\|[ \t]*)(?:deployer|signer|keeper|liquidator|private[ \t_-]*key|secret[ \t_-]*key))[*_`'"]*[ \t]*(?:(?:\||:|=>|->|—|–|-|=)[ \t]*|(?:is|was|are|equals)[ \t]+)[*_`'"]*((?:0x)?[0-9a-f]{64})(?:[^0-9a-z]|$)'''
+secretGroup = 1
+keywords = [
+  "key",
+  "privkey",
+  "privatekey",
+  "deployer",
+  "signer",
+  "keeper",
+  "liquidator",
+]
+
+# 12- to 24-word BIP-39 mnemonics (env, config, constructors, markdown/tables).
+[[rules]]
+id = "evm-bip39-mnemonic"
+description = "12- to 24-word BIP-39 mnemonic or recovery seed phrase"
+regex = '''(?i:(?:^|[^a-z0-9_])(?:[a-z0-9_]*mnemonic[a-z0-9_]*|seed[ \t_-]*(?:phrase|words?)?|recovery[ \t_-]*(?:phrase|words?|seed)|secret[ \t_-]*(?:phrase|words?|recovery)|backup[ \t_-]*(?:phrase|words?)|bip[-_]?39|from(?:Phrase|Mnemonic)|mnemonicToAccount))[*_`'"]*[ \t]*(?::=|=>|[:=(|]|\bis\b)[ \t]*(?:\r?\n[ \t]+(?:-[ \t]+)?)?[*_`'"]*(?-i:((?:[a-z]{3,8}[ \t]+){11}[a-z]{3,8}(?:(?:[ \t]+[a-z]{3,8}){3}){0,4}))(?:["'`\)\}\].,;!?]|[ \t]*(?:\||#|\r?\n|$))'''
+secretGroup = 1
+keywords = [
+  "mnemonic",
+  "seed",
+  "recovery",
+  "phrase",
+  "bip39",
+  "bip-39",
+  "bip_39",
+  "fromphrase",
+  "frommnemonic",
+  "mnemonictoaccount",
+]
+
 # A bare 20-byte EVM address is public data. The regex is anchored and tested against the
 # extracted secret only, so a 32-byte key (which contains many 40-hex substrings) is never
 # allowlisted. Do not unanchor it: the old `0x[a-fA-F0-9]{40}` allowlisted leaked keys.
@@ -25,3 +100,12 @@ keywords = ["key", "private", "secret", "mnemonic", "seed", "pk"]
 description = "Public 20-byte EVM addresses (exact match only)"
 regexTarget = "secret"
 regexes = ['''^0x[a-fA-F0-9]{40}$''']
+
+# ---- lumina-looping only: public Hardhat/Anvil default mnemonic in hardhat.config.js.
+[[allowlists]]
+description = "Public Hardhat/Anvil default test mnemonic in local hardhat.config.js"
+targetRules = ["evm-bip39-mnemonic"]
+condition = "AND"
+paths = ['''^hardhat\.config\.js$''']
+regexTarget = "secret"
+regexes = ['''^test test test test test test test test test test test junk$''']
